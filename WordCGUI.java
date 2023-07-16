@@ -17,16 +17,19 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.URL;
 import java.net.URLConnection;
+import java.sql.*;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.PriorityQueue;
 
 public class WordCGUI extends Application {
     private TextArea resultTextArea;
+    private Connection connection;
 
     public static void main(String[] args) {
         launch(args);
     }
+
     @Override
     public void start(Stage primaryStage) {
         primaryStage.setTitle("Word Frequency Counter");
@@ -43,14 +46,22 @@ public class WordCGUI extends Application {
         borderPane.setBottom(buttonBox);
 
         ScrollPane scrollPane = new ScrollPane(resultTextArea);
-        scrollPane.setFitToWidth(true); 
+        scrollPane.setFitToWidth(true);
         scrollPane.setFitToHeight(true);
         borderPane.setCenter(scrollPane);
         borderPane.setPadding(new Insets(10));
-        
+
         Scene scene = new Scene(borderPane, 400, 300);
         primaryStage.setScene(scene);
         primaryStage.show();
+
+        
+        try {
+            connection = DriverManager.getConnection("jdbc:mysql://localhost:3306/words", "****", "*******");
+            createWordFreqTable();
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+        }
     }
 
     private void countButtonClicked() {
@@ -59,6 +70,7 @@ public class WordCGUI extends Application {
         new Thread(() -> {
             try {
                 Map<String, Integer> wordFreq = getWordFreq(url);
+                saveWordFreqToDatabase(wordFreq);
 
                 Platform.runLater(() -> displayWordFreq(wordFreq));
             } catch (IOException e) {
@@ -67,15 +79,15 @@ public class WordCGUI extends Application {
         }).start();
     }
 
-    private static String removeHtmlTags(String html) {
+    public static String removeHtmlTags(String html) {
         String strippedText = html.replaceAll("\\<.*?\\>", "");
         strippedText = strippedText.replaceAll("&\\w+;", "").replaceAll("[\"“”‘’]", "");
         strippedText = strippedText.replaceAll("\\s+", " ").trim();
         return strippedText;
     }
-    
-    private static Map<String, Integer> getWordFreq(String url) throws IOException {
-    	
+
+    public static Map<String, Integer> getWordFreq(String url) throws IOException {
+
         Map<String, Integer> wordFreq = new HashMap<>();
         StringBuilder htmlBuilder = new StringBuilder();
         URLConnection connection = new URL(url).openConnection();
@@ -108,8 +120,21 @@ public class WordCGUI extends Application {
         return wordFreq;
     }
 
+    private void saveWordFreqToDatabase(Map<String, Integer> wordFreq) {
+        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO word_freq (word, frequency) VALUES (?, ?) ON DUPLICATE KEY UPDATE frequency = VALUES(frequency)")) {
+            for (Map.Entry<String, Integer> entry : wordFreq.entrySet()) {
+                statement.setString(1, entry.getKey());
+                statement.setInt(2, entry.getValue());
+                statement.addBatch();
+            }
+            statement.executeBatch();
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+        }
+    }
+
     private void displayWordFreq(Map<String, Integer> wordFreq) {
-        PriorityQueue<Map.Entry<String, Integer>> pq = new PriorityQueue<>((a, b) -> b.getValue()-a.getValue());
+        PriorityQueue<Map.Entry<String, Integer>> pq = new PriorityQueue<>((a, b) -> b.getValue() - a.getValue());
         pq.addAll(wordFreq.entrySet());
 
         StringBuilder resultBuilder = new StringBuilder();
@@ -119,5 +144,14 @@ public class WordCGUI extends Application {
         }
 
         resultTextArea.setText(resultBuilder.toString());
+    }
+
+    private void createWordFreqTable() throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE IF NOT EXISTS word_freq (" +
+                    "id INT PRIMARY KEY AUTO_INCREMENT," +
+                    "word VARCHAR(255) UNIQUE," +
+                    "frequency INT)");
+        }
     }
 }
